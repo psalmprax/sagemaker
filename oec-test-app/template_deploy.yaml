@@ -1,0 +1,168 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'oec-test-app
+
+  Sample SAM Template for oec-test-app
+
+  '
+Mappings:
+  RegionMap:
+    us-west-2:
+      NullTransformer: 123456789012.dkr.ecr.us-west-2.amazonaws.com/mymodel:latest
+    eu-central-1:
+      NullTransformer: '073740532428.dkr.ecr.eu-central-1.amazonaws.com/sm-pretrained-spacy:latest'
+Globals:
+  Function:
+    Timeout: 300
+    Environment:
+      Variables:
+        app_name: predict
+        endpoint_name:
+          Fn::GetAtt:
+          - Endpoint
+          - EndpointName
+Resources:
+  Predict:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: s3://aws-sam-cli-managed-default-samclisourcebucket-1jjo6r5tuotbj/16514e95bf7dced087a1b78ebeb213e7
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Architectures:
+      - x86_64
+      Role:
+        Fn::GetAtt:
+        - ExecutionRole
+        - Arn
+      Policies:
+      - PolicyName: Inline Log
+        PolicyDocument:
+        - Version: '2012-10-17'
+        - Statement:
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource: '*'
+    Metadata:
+      SamResourceId: Predict
+  CronEvent:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: cron(0/5 * * * ? *)
+      Targets:
+      - Arn:
+          Fn::GetAtt:
+          - Predict
+          - Arn
+        Id:
+          Ref: Predict
+    Metadata:
+      SamResourceId: CronEvent
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName:
+        Fn::GetAtt:
+        - Predict
+        - Arn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn:
+        Fn::GetAtt:
+        - CronEvent
+        - Arn
+    Metadata:
+      SamResourceId: LambdaInvokePermission
+  Endpoint:
+    Type: AWS::SageMaker::Endpoint
+    Properties:
+      EndpointConfigName:
+        Fn::GetAtt:
+        - EndpointConfig
+        - EndpointConfigName
+    Metadata:
+      SamResourceId: Endpoint
+  EndpointConfig:
+    Type: AWS::SageMaker::EndpointConfig
+    Properties:
+      ProductionVariants:
+      - InitialInstanceCount: 1
+        InitialVariantWeight: 1.0
+        InstanceType: ml.t2.large
+        ModelName:
+          Fn::GetAtt:
+          - Model
+          - ModelName
+        VariantName:
+          Fn::GetAtt:
+          - Model
+          - ModelName
+    Metadata:
+      SamResourceId: EndpointConfig
+  Model:
+    Type: AWS::SageMaker::Model
+    Properties:
+      PrimaryContainer:
+        Image:
+          Fn::FindInMap:
+          - RegionMap
+          - Ref: AWS::Region
+          - NullTransformer
+      ExecutionRoleArn:
+        Fn::GetAtt:
+        - ExecutionRole
+        - Arn
+    Metadata:
+      SamResourceId: Model
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+            - sagemaker.amazonaws.com
+            - cloudformation.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: /
+      Policies:
+      - PolicyName: root
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - '*'
+            - ecr:BatchDeleteImage
+            - ecr:UploadLayerPart
+            - ecr:DeleteRepository
+            - ecr:PutImage
+            - ecr:SetRepositoryPolicy
+            - ecr:BatchGetImage
+            - ecr:CompleteLayerUpload
+            - ecr:DeleteRepositoryPolicy
+            - ecr:InitiateLayerUpload
+            Resource: '*'
+    Metadata:
+      SamResourceId: ExecutionRole
+Outputs:
+  Predict:
+    Description: Hello World Lambda Function ARN
+    Value:
+      Fn::GetAtt:
+      - Predict
+      - Arn
+  EndpointId:
+    Value:
+      Ref: Endpoint
+  EndpointName:
+    Value:
+      Fn::GetAtt:
+      - Endpoint
+      - EndpointName

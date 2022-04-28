@@ -1,0 +1,136 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  oec-test-app
+
+  Sample SAM Template for oec-test-app
+
+# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
+
+Mappings:
+  RegionMap:
+    "us-west-2":
+      "NullTransformer": "123456789012.dkr.ecr.us-west-2.amazonaws.com/mymodel:latest"
+    "eu-central-1":
+      "NullTransformer": "073740532428.dkr.ecr.eu-central-1.amazonaws.com/sm-pretrained-spacy:latest"
+
+Globals:
+  Function:
+    Timeout: 300
+    Environment:
+      Variables:
+        app_name: predict
+        endpoint_name: !GetAtt Endpoint.EndpointName
+
+Resources:
+  Predict:
+    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+    Properties:
+      CodeUri: predict/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Architectures:
+        - x86_64
+      Role:
+        Fn::GetAtt: ["ExecutionRole", Arn]
+      Policies:
+        - PolicyName: "Inline Log"
+          PolicyDocument:
+            - Version: "2012-10-17"
+            - Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+  CronEvent: #logical name of the resource
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: cron(0/5 * * * ? *) #when the event should trigger
+      Targets:
+        - Arn:
+            Fn::GetAtt: [ Predict , "Arn" ] #reference the lambda function by its arn
+          Id:
+            Ref: Predict #unique name of the target
+  LambdaInvokePermission: #logical name of the resource
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName:
+        Fn::GetAtt: [ Predict ,"Arn" ] #reference the lambda function by its arn
+      Action: lambda:InvokeFunction #allow invoking of lambda functions
+      Principal: events.amazonaws.com #grant permission to the events system
+      SourceArn:
+        Fn::GetAtt: [ CronEvent , "Arn" ] #define which event is allowed to trigger lambdas
+  Endpoint:
+    Type: "AWS::SageMaker::Endpoint"
+    Properties:
+      EndpointConfigName:
+        !GetAtt EndpointConfig.EndpointConfigName
+  EndpointConfig:
+    Type: "AWS::SageMaker::EndpointConfig"
+    Properties:
+      ProductionVariants:
+        - InitialInstanceCount: 1
+          InitialVariantWeight: 1.0
+          InstanceType: ml.t2.large
+          ModelName: !GetAtt Model.ModelName
+          VariantName: !GetAtt Model.ModelName
+  Model:
+    Type: "AWS::SageMaker::Model"
+    Properties:
+      PrimaryContainer:
+        Image: !FindInMap [RegionMap, !Ref "AWS::Region", "NullTransformer"]
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+
+  ExecutionRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+#      RoleName: "lambda-with-vpc-access"
+#      ManagedPolicyArns:
+#        - "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+                - sagemaker.amazonaws.com
+                - cloudformation.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+        -
+          PolicyName: "root"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect: "Allow"
+                Action:
+                  - "*"
+                  - "ecr:BatchDeleteImage"
+                  - "ecr:UploadLayerPart"
+                  - "ecr:DeleteRepository"
+                  - "ecr:PutImage"
+                  - "ecr:SetRepositoryPolicy"
+                  - "ecr:BatchGetImage"
+                  - "ecr:CompleteLayerUpload"
+                  - "ecr:DeleteRepositoryPolicy"
+                  - "ecr:InitiateLayerUpload"
+                Resource: "*"
+
+Outputs:
+  # ServerlessRestApi is an implicit API created out of Events key under Serverless::Function
+  # Find out more about other implicit resources you can reference within SAM
+  # https://github.com/awslabs/serverless-application-model/blob/master/docs/internals/generated_resources.rst#api
+
+  Predict:
+    Description: "Predict Lambda Function ARN"
+    Value: !GetAtt Predict.Arn
+  EndpointId:
+    Value: !Ref Endpoint
+  EndpointName:
+    Value: !GetAtt Endpoint.EndpointName
